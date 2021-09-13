@@ -1,4 +1,13 @@
 terraform {
+  backend "remote" {
+    hostname = "app.terraform.io"
+    organization = "ttp"
+
+    workspaces {
+      name = "infra"
+    }
+  }
+
   required_providers {
     linode = {
       source = "linode/linode"
