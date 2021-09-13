@@ -1,0 +1,9 @@
+.terraform
+.terraform.*
+
+.env
+
+*.pkrvars.hcl
+*.tfvars
+*.tfstate
+*.tfstate.backup

@@ -1,0 +1,526 @@
+#!/bin/bash
+# This script is used to configure and run Consul on an Linode server.
+
+set -e
+
+readonly CONSUL_CONFIG_FILE="default.json"
+readonly CONSUL_GOSSIP_ENCRYPTION_CONFIG_FILE="gossip-encryption.json"
+readonly CONSUL_RPC_ENCRYPTION_CONFIG_FILE="rpc-encryption.json"
+readonly SYSTEMD_CONFIG_PATH="/etc/systemd/system/consul.service"
+
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_NAME="$(basename "$0")"
+
+readonly MAX_RETRIES=30
+readonly SLEEP_BETWEEN_RETRIES_SEC=10
+
+function print_usage {
+  echo
+  echo "Usage: run-consul [OPTIONS]"
+  echo
+  echo "This script is used to configure and run Consul on an Linode server."
+  echo
+  echo "Options:"
+  echo
+  echo -e "  --server\t\tIf set, run in server mode. Optional. Exactly one of --server or --client must be set."
+  echo -e "  --client\t\tIf set, run in client mode. Optional. Exactly one of --server or --client must be set."
+  echo -e "  --cluster-tag-name\tAutomatically form a cluster with Instances that have this tag name. Optional."
+  echo -e "  --datacenter\t\tThe name of the datacenter Consul is running in. Optional. If not specified, will default to AWS region name."
+  echo -e "  --config-dir\t\tThe path to the Consul config folder. Optional. Default is the absolute path of '../config', relative to this script."
+  echo -e "  --data-dir\t\tThe path to the Consul data folder. Optional. Default is the absolute path of '../data', relative to this script."
+  echo -e "  --systemd-stdout\t\tThe StandardOutput option of the systemd unit.  Optional.  If not configured, uses systemd's default (journal)."
+  echo -e "  --systemd-stderr\t\tThe StandardError option of the systemd unit.  Optional.  If not configured, uses systemd's default (inherit)."
+  echo -e "  --bin-dir\t\tThe path to the folder with Consul binary. Optional. Default is the absolute path of the parent folder of this script."
+  echo -e "  --user\t\tThe user to run Consul as. Optional. Default is to use the owner of --config-dir."
+  echo -e "  --enable-gossip-encryption\t\tEnable encryption of gossip traffic between nodes. Optional. Must also specify --gossip-encryption-key."
+  echo -e "  --gossip-encryption-key\t\tThe key to use for encrypting gossip traffic. Optional. Must be specified with --enable-gossip-encryption."
+  echo -e "  --enable-rpc-encryption\t\tEnable encryption of RPC traffic between nodes. Optional. Must also specify --ca-file-path, --cert-file-path and --key-file-path."
+  echo -e "  --ca-path\t\tPath to the directory of CA files used to verify outgoing connections. Optional. Must be specified with --enable-rpc-encryption."
+  echo -e "  --cert-file-path\tPath to the certificate file used to verify incoming connections. Optional. Must be specified with --enable-rpc-encryption and --key-file-path."
+  echo -e "  --key-file-path\tPath to the certificate key used to verify incoming connections. Optional. Must be specified with --enable-rpc-encryption and --cert-file-path."
+  echo -e "  --environment\t\tA single environment variable in the key/value pair form 'KEY=\"val\"' to pass to Consul as environment variable when starting it up. Repeat this option for additional variables. Optional."
+  echo -e "  --skip-consul-config\tIf this flag is set, don't generate a Consul configuration file. Optional. Default is false."
+  echo -e "  --recursor\tThis flag provides address of upstream DNS server that is used to recursively resolve queries if they are not inside the service domain for Consul. Repeat this option for additional variables. Optional."
+  echo
+  echo
+  echo "Example:"
+  echo
+  echo "  run-consul --server --config-dir /custom/path/to/consul/config"
+}
+
+function log {
+  local -r level="$1"
+  local -r message="$2"
+  local -r timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+  >&2 echo -e "${timestamp} [${level}] [$SCRIPT_NAME] ${message}"
+}
+
+function log_info {
+  local -r message="$1"
+  log "INFO" "$message"
+}
+
+function log_warn {
+  local -r message="$1"
+  log "WARN" "$message"
+}
+
+function log_error {
+  local -r message="$1"
+  log "ERROR" "$message"
+}
+
+# Based on code from: http://stackoverflow.com/a/16623897/483528
+function strip_prefix {
+  local -r str="$1"
+  local -r prefix="$2"
+  echo "${str#$prefix}"
+}
+
+function assert_not_empty {
+  local -r arg_name="$1"
+  local -r arg_value="$2"
+
+  if [[ -z "$arg_value" ]]; then
+    log_error "The value for '$arg_name' cannot be empty"
+    print_usage
+    exit 1
+  fi
+}
+
+function get_instance_ip_address {
+  #log_info 'get_instance_ip_address'
+  #curl --silent --location "https://ipv4.icanhazip.com"
+
+  ip route | grep -E "192.168.[0-9]{1,3}.[0-9]{1,3}" | awk '{print $9}'
+}
+
+function get_instance_json {
+  local ip_address=""
+  ip_address=$(get_instance_ip_address)
+  log_info 'get_instance_json'
+  linode-cli linodes list --json | jq 'map(select(.ipv4[] | contains ("'"${ip_address}"'"))) | .[]'
+}
+
+function get_instance_id {
+  log_info 'get_instance_id'
+  get_instance_json | jq -r '.id'
+}
+
+function get_instance_region {
+  log_info 'get_instance_region'
+  get_instance_json | jq -r '.region'
+}
+
+function get_instance_tags {
+  local -r instance_id="$1"
+  local -r instance_region="$2"
+  local tags=""
+  local count_tags=""
+
+  log_info "Looking up tags for Instance $instance_id in $instance_region"
+  for (( i=1; i<="$MAX_RETRIES"; i++ )); do
+    log_info 'get_instance_tags'
+    tags=$(get_instance_json | jq -r '.tags')
+    count_tags=$(echo $tags | jq -r ".[] | length")
+    if [[ "$count_tags" -gt 0 ]]; then
+      log_info "This Instance $instance_id in $instance_region has Tags."
+      echo "$tags"
+      return
+    else
+      log_warn "This Instance $instance_id in $instance_region does not have any Tags."
+      log_warn "Will sleep for $SLEEP_BETWEEN_RETRIES_SEC seconds and try again."
+      sleep "$SLEEP_BETWEEN_RETRIES_SEC"
+    fi
+  done
+
+  log_error "Could not find Instance Tags for $instance_id in $instance_region after $MAX_RETRIES retries."
+  exit 1
+}
+
+# TODO" fix missing get_cluster_size
+function get_cluster_size {
+  local -r cluster_tag_name="$1"
+  local -r instance_region="$2"
+
+  # TODO: clean up role-server magic string
+  linode-cli linodes list --region "${instance_region}" --tags "${cluster_tag_name}-role-server" --json | jq 'length'
+}
+
+function assert_is_installed {
+  local -r name="$1"
+
+  if [[ ! $(command -v ${name}) ]]; then
+    log_error "The binary '$name' is required by this script but is not installed or in the system's PATH."
+    exit 1
+  fi
+}
+
+function split_by_lines {
+  local prefix="$1"
+  shift
+
+  for var in "$@"; do
+    echo "${prefix}${var}"
+  done
+}
+
+function generate_consul_config {
+  local -r server="${1}"
+  local -r config_dir="${2}"
+  local -r user="${3}"
+  local -r cluster_tag_name="${4}"
+  local -r datacenter="${5}"
+  local -r enable_gossip_encryption="${6}"
+  local -r gossip_encryption_key="${7}"
+  local -r enable_rpc_encryption="${8}"
+  local -r ca_path="${9}"
+  local -r cert_file_path="${10}"
+  local -r key_file_path="${11}"
+  local -r config_path="$config_dir/$CONSUL_CONFIG_FILE"
+
+  shift 11
+  local -r recursors=("$@")
+
+  local instance_id=""
+  local instance_ip_address=""
+  local instance_region=""
+  local ui="false"
+
+  instance_id=$(get_instance_id)
+  instance_ip_address=$(get_instance_ip_address)
+  instance_region=$(get_instance_region)
+
+  local retry_join_json=""
+  if [[ -z "$cluster_tag_name" ]]; then
+    log_warn "Cluster tag name ($cluster_tag_name) is empty. Will not automatically try to form a cluster based on Linode tags."
+  else
+    retry_join_json=$(cat <<EOF
+"retry_join": ["provider=linode region=$instance_region tag_name=$cluster_tag_name"],
+EOF
+)
+  fi
+
+  local recursors_config=""
+  if (( ${#recursors[@]} != 0 )); then
+        recursors_config="\"recursors\" : [ "
+        for recursor in ${recursors[@]}
+        do
+            recursors_config="${recursors_config}\"${recursor}\", "
+        done
+        recursors_config=$(echo "${recursors_config}"| sed 's/, $//')" ],"
+  fi
+
+  local bootstrap_expect=""
+  if [[ "$server" == "true" ]]; then
+    local cluster_size=""
+
+    cluster_size=$(get_cluster_size "$cluster_tag_name" "$instance_region")
+
+    bootstrap_expect="\"bootstrap_expect\": $cluster_size,"
+    ui="true"
+  fi
+
+  local gossip_encryption_configuration=""
+  if [[ "$enable_gossip_encryption" == "true" && ! -z "$gossip_encryption_key" ]]; then
+    log_info "Creating gossip encryption configuration"
+    gossip_encryption_configuration="\"encrypt\": \"$gossip_encryption_key\","
+  fi
+
+  local rpc_encryption_configuration=""
+  if [[ "$enable_rpc_encryption" == "true" && ! -z "$ca_path" && ! -z "$cert_file_path" && ! -z "$key_file_path" ]]; then
+    log_info "Creating RPC encryption configuration"
+    rpc_encryption_configuration=$(cat <<EOF
+"verify_outgoing": true,
+"verify_incoming": true,
+"ca_path": "$ca_path",
+"cert_file": "$cert_file_path",
+"key_file": "$key_file_path",
+EOF
+)
+  fi
+
+  log_info "Creating default Consul configuration"
+  local default_config_json=$(cat <<EOF
+{
+  "advertise_addr": "$instance_ip_address",
+  "bind_addr": "$instance_ip_address",
+  $bootstrap_expect
+  "client_addr": "0.0.0.0",
+  "datacenter": "$datacenter",
+  "node_name": "$instance_id",
+  $recursors_config
+  $retry_join_json
+  "server": $server,
+  $gossip_encryption_configuration
+  $rpc_encryption_configuration
+  "ui": $ui
+}
+EOF
+)
+  log_info "Installing Consul config file in $config_path"
+  echo "$default_config_json" | tee -a debug.log | jq '.' > "$config_path"
+  chown "$user:$user" "$config_path"
+}
+
+function generate_systemd_config {
+  local -r systemd_config_path="$1"
+  local -r consul_config_dir="$2"
+  local -r consul_data_dir="$3"
+  local -r consul_systemd_stdout="$4"
+  local -r consul_systemd_stderr="$5"
+  local -r consul_bin_dir="$6"
+  local -r consul_user="$7"
+  shift 7
+  local -r environment=("$@")
+  local -r config_path="$consul_config_dir/$CONSUL_CONFIG_FILE"
+
+  log_info "Creating systemd config file to run Consul in $systemd_config_path"
+
+  local -r unit_config=$(cat <<EOF
+[Unit]
+Description="HashiCorp Consul - A service mesh solution"
+Documentation=https://www.consul.io/
+Requires=network-online.target
+After=network-online.target
+ConditionFileNotEmpty=$config_path
+EOF
+)
+
+  local -r service_config=$(cat <<EOF
+[Service]
+Type=notify
+User=$consul_user
+Group=$consul_user
+ExecStart=$consul_bin_dir/consul agent -config-dir $consul_config_dir -data-dir $consul_data_dir
+ExecReload=$consul_bin_dir/consul reload
+KillMode=process
+Restart=on-failure
+TimeoutSec=300s
+LimitNOFILE=65536
+$(split_by_lines "Environment=" "${environment[@]}")
+EOF
+)
+
+  local log_config=""
+  if [[ ! -z $consul_systemd_stdout ]]; then
+    log_config+="StandardOutput=$consul_systemd_stdout\n"
+  fi
+  if [[ ! -z $consul_systemd_stderr ]]; then
+    log_config+="StandardError=$consul_systemd_stderr\n"
+  fi
+
+  local -r install_config=$(cat <<EOF
+[Install]
+WantedBy=multi-user.target
+EOF
+)
+
+  echo -e "$unit_config" > "$systemd_config_path"
+  echo -e "$service_config" >> "$systemd_config_path"
+  echo -e "$log_config" >> "$systemd_config_path"
+  echo -e "$install_config" >> "$systemd_config_path"
+}
+
+function start_consul {
+  log_info "Reloading systemd config and starting Consul"
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable consul.service
+  sudo systemctl restart consul.service
+}
+
+# Based on: http://unix.stackexchange.com/a/7732/215969
+function get_owner_of_path {
+  local -r path="$1"
+  ls -ld "$path" | awk '{print $3}'
+}
+
+function run {
+  local server="false"
+  local client="false"
+  local config_dir=""
+  local data_dir=""
+  local systemd_stdout=""
+  local systemd_stderr=""
+  local bin_dir=""
+  local user=""
+  local cluster_tag_name=""
+  local datacenter=""
+  local enable_gossip_encryption="false"
+  local gossip_encryption_key=""
+  local enable_rpc_encryption="false"
+  local ca_path=""
+  local cert_file_path=""
+  local key_file_path=""
+  local environment=()
+  local skip_consul_config="false"
+  local recursors=()
+  local all_args=()
+
+  while [[ $# > 0 ]]; do
+    local key="$1"
+
+    case "$key" in
+      --server)
+        server="true"
+        ;;
+      --client)
+        client="true"
+        ;;
+      --config-dir)
+        assert_not_empty "$key" "$2"
+        config_dir="$2"
+        shift
+        ;;
+      --data-dir)
+        assert_not_empty "$key" "$2"
+        data_dir="$2"
+        shift
+        ;;
+      --systemd-stdout)
+        assert_not_empty "$key" "$2"
+        systemd_stdout="$2"
+        shift
+        ;;
+      --systemd-stderr)
+        assert_not_empty "$key" "$2"
+        systemd_stderr="$2"
+        shift
+        ;;
+      --bin-dir)
+        assert_not_empty "$key" "$2"
+        bin_dir="$2"
+        shift
+        ;;
+      --user)
+        assert_not_empty "$key" "$2"
+        user="$2"
+        shift
+        ;;
+      --cluster-tag-name)
+        assert_not_empty "$key" "$2"
+        cluster_tag_name="$2"
+        shift
+        ;;
+      --datacenter)
+        assert_not_empty "$key" "$2"
+        datacenter="$2"
+        shift
+        ;;
+      --enable-gossip-encryption)
+        enable_gossip_encryption="true"
+        ;;
+      --gossip-encryption-key)
+        assert_not_empty "$key" "$2"
+        gossip_encryption_key="$2"
+        shift
+        ;;
+      --enable-rpc-encryption)
+        enable_rpc_encryption="true"
+        ;;
+      --ca-path)
+        assert_not_empty "$key" "$2"
+        ca_path="$2"
+        shift
+        ;;
+      --cert-file-path)
+        assert_not_empty "$key" "$2"
+        cert_file_path="$2"
+        shift
+        ;;
+      --key-file-path)
+        assert_not_empty "$key" "$2"
+        key_file_path="$2"
+        shift
+        ;;
+      --environment)
+        assert_not_empty "$key" "$2"
+        environment+=("$2")
+        shift
+        ;;
+      --skip-consul-config)
+        skip_consul_config="true"
+        ;;
+      --recursor)
+        assert_not_empty "$key" "$2"
+        recursors+=("$2")
+        shift
+        ;;
+      --help)
+        print_usage
+        exit
+        ;;
+      *)
+        log_error "Unrecognized argument: $key"
+        print_usage
+        exit 1
+        ;;
+    esac
+
+    shift
+  done
+
+  if [[ ("$server" == "true" && "$client" == "true") || ("$server" == "false" && "$client" == "false") ]]; then
+    log_error "Exactly one of --server or --client must be set."
+    exit 1
+  fi
+
+  assert_is_installed "systemctl"
+  assert_is_installed "linode-cli"
+  assert_is_installed "curl"
+  assert_is_installed "jq"
+
+  if [[ -z "$config_dir" ]]; then
+    config_dir=$(cd "$SCRIPT_DIR/../config" && pwd)
+  fi
+
+  if [[ -z "$data_dir" ]]; then
+    data_dir=$(cd "$SCRIPT_DIR/../data" && pwd)
+  fi
+
+  # If $systemd_stdout and/or $systemd_stderr are empty, we leave them empty so that generate_systemd_config will use systemd's defaults (journal and inherit, respectively)
+
+  if [[ -z "$bin_dir" ]]; then
+    bin_dir=$(cd "$SCRIPT_DIR/../bin" && pwd)
+  fi
+
+  if [[ -z "$user" ]]; then
+    user=$(get_owner_of_path "$config_dir")
+  fi
+
+  if [[ -z "$datacenter" ]]; then
+    datacenter=$(get_instance_region)
+  fi
+
+  if [[ "$skip_consul_config" == "true" ]]; then
+    log_info "The --skip-consul-config flag is set, so will not generate a default Consul config file."
+  else
+    if [[ "$enable_gossip_encryption" == "true" ]]; then
+      assert_not_empty "--gossip-encryption-key" "$gossip_encryption_key"
+    fi
+    if [[ "$enable_rpc_encryption" == "true" ]]; then
+      assert_not_empty "--ca-path" "$ca_path"
+      assert_not_empty "--cert-file-path" "$cert_file_path"
+      assert_not_empty "--key_file_path" "$key_file_path"
+    fi
+
+    generate_consul_config "$server" \
+      "$config_dir" \
+      "$user" \
+      "$cluster_tag_name" \
+      "$datacenter" \
+      "$enable_gossip_encryption" \
+      "$gossip_encryption_key" \
+      "$enable_rpc_encryption" \
+      "$ca_path" \
+      "$cert_file_path" \
+      "$key_file_path" \
+      "${recursors[@]}"
+  fi
+
+  generate_systemd_config "$SYSTEMD_CONFIG_PATH" "$config_dir" "$data_dir" "$systemd_stdout" "$systemd_stderr" "$bin_dir" "$user" "${environment[@]}"
+  start_consul
+}
+
+run "$@"
