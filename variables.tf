@@ -53,7 +53,7 @@ variable "tags" {
 
 variable "secure_inboud_ipv4_cidr" {
   type    = string
-  default = "0.0.0.0/0"
+  default = "0.0.0.0/32"
 }
 
 variable "domain" {

@@ -1,4 +1,5 @@
 job "traefik" {
+  region      = "global"
   datacenters = ["ap-southeast"]
   type        = "service"
 
@@ -8,6 +9,10 @@ job "traefik" {
     network {
       port "http" {
         static = 80
+      }
+
+      port "443" {
+        static = 443
       }
 
       port "api" {
@@ -31,37 +36,32 @@ job "traefik" {
       driver = "docker"
 
       config {
-        image        = "traefik:v2.2"
+        image        = "traefik:v2.4"
         network_mode = "host"
+        args = [
+          "--entryPoints.http.address=:80",
+          "--entryPoints.http.address=:443",
+          "--entryPoints.traefik.address=:8081",
 
-        volumes = [
-          "local/traefik.toml:/etc/traefik/traefik.toml",
+
+          "--api.dashboard=true",
+          "--api.insecure=true",
+          "--providers.consulcatalog=true",
+          "--providers.consulcatalog.exposedByDefault=false",
+          "--providers.consulcatalog.endpoint.address=http://127.0.0.1:8500",
+          "--providers.consulcatalog.endpoint.scheme=http",
+          "--providers.consulcatalog.prefix=traefik",
+
+          "--providers.consulcatalog.defaultrule=Host(`{{ .Name }}.adl.cafe`)",
+
+          "--certificatesresolvers.linode.acme.email=thomasalbrighton@gmail.com",
+          "--certificatesresolvers.linode.acme.storage=acme.json",
+          "--certificatesresolvers.linode.acme.dnschallenge.provider=linode"
         ]
       }
 
-      template {
-        data = <<EOF
-[entryPoints]
-    [entryPoints.http]
-    address = ":80"
-    [entryPoints.traefik]
-    address = ":8081"
-
-[api]
-    dashboard = true
-    insecure  = true
-
-# Enable Consul Catalog configuration backend.
-[providers.consulCatalog]
-    prefix           = "traefik"
-    exposedByDefault = false
-
-    [providers.consulCatalog.endpoint]
-      address = "127.0.0.1:8500"
-      scheme  = "http"
-EOF
-
-        destination = "local/traefik.toml"
+      env {
+        LINODE_TOKEN = "${linode_token}"
       }
 
       resources {
