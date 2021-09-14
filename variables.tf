@@ -51,24 +51,9 @@ variable "tags" {
   default     = []
 }
 
-variable "server_inboud_ipv4_cidr" {
+variable "secure_inboud_ipv4_cidr" {
   type    = string
   default = "0.0.0.0/0"
-}
-
-variable "server_inboud_ipv6_cidr" {
-  type    = string
-  default = "::/0"
-}
-
-variable "client_inboud_ipv4_cidr" {
-  type    = string
-  default = "0.0.0.0/0"
-}
-
-variable "client_inboud_ipv6_cidr" {
-  type    = string
-  default = "::/0"
 }
 
 variable "domain" {
