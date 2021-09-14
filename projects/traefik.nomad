@@ -43,7 +43,7 @@ job "traefik" {
         data = <<EOF
 [entryPoints]
     [entryPoints.http]
-    address = ":8080"
+    address = ":80"
     [entryPoints.traefik]
     address = ":8081"
 

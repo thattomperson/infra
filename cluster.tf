@@ -18,42 +18,6 @@ module "nomad_servers" {
   tags = var.tags
 }
 
-// resource "linode_firewall" "nomad_server_firewall" {
-//   label = "nomad_server_firewall"
-//   tags  = var.tags
-
-//   inbound {
-//     label    = "allow-nomad-ui"
-//     action   = "ACCEPT"
-//     protocol = "TCP"
-//     ports    = "4646"
-//     ipv4     = [var.server_inboud_ipv4_cidr]
-//   }
-
-//   inbound {
-//     label    = "allow-consul-ui"
-//     action   = "ACCEPT"
-//     protocol = "TCP"
-//     ports    = "8500"
-//     ipv4     = [var.server_inboud_ipv4_cidr]
-//   }
-
-//   inbound {
-//     label    = "allow-ssh"
-//     action   = "ACCEPT"
-//     protocol = "TCP"
-//     ports    = "22"
-//     ipv4     = [var.server_inboud_ipv4_cidr]
-//   }
-
-//   inbound_policy = "DROP"
-//   outbound_policy = "ACCEPT"
-
-//   linodes = module.nomad_servers.instance_ids
-// }
-
-
-
 # ---------------------------------------------------------------------------------------------------------------------
 # DEPLOY THE CLIENT NODES
 # ---------------------------------------------------------------------------------------------------------------------
@@ -143,31 +107,3 @@ resource "linode_domain_record" "nomad_clients_6_apex" {
   record_type = "AAAA"
   target = linode_nodebalancer.nomad_clients.ipv6
 }
-
-// resource "linode_firewall" "nomad_client_firewall" {
-//   label = "nomad_client_firewall"
-//   tags  = var.tags
-
-//   inbound {
-//     label    = "allow-http"
-//     action   = "ACCEPT"
-//     protocol = "TCP"
-//     ports    = "4646"
-//     ipv4     = [var.client_inboud_ipv4_cidr]
-//     ipv6     = [var.client_inboud_ipv6_cidr]
-//   }
-
-//     inbound {
-//     label    = "allow-ssh"
-//     action   = "ACCEPT"
-//     protocol = "TCP"
-//     ports    = "22"
-//     ipv4     = [var.client_inboud_ipv4_cidr]
-//     ipv6     = [var.client_inboud_ipv6_cidr]
-//   }
-
-//   inbound_policy = "DROP"
-//   outbound_policy = "ACCEPT"
-
-//   linodes = module.nomad_clients.instance_ids
-// }

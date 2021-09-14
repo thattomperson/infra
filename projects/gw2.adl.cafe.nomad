@@ -4,7 +4,6 @@ job "docs" {
   # Specify this job should run in the region named "us". Regions
   # are defined by the Nomad servers' configuration.
 
-
   # Spread the tasks in this job between us-west-1 and us-east-1.
   datacenters = ["ap-southeast"]
 
@@ -39,7 +38,10 @@ job "docs" {
     # The service block tells Nomad how to register this service
     # with Consul for service discovery and monitoring.
     service {
-      tags = ["urlprefix-gw2.adl.cafe"]
+      tags = [
+        "traefik.enable=true",
+        "traefik.http.routers.http.rule=Host(`gw2.adl.cafe`)",
+      ]
       # This tells Consul to monitor the service on the port
       # labelled "http". Since Nomad allocates high dynamic port
       # numbers, we use labels to refer to them.
