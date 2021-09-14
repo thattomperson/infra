@@ -1,6 +1,6 @@
 terraform {
   backend "remote" {
-    hostname = "app.terraform.io"
+    hostname     = "app.terraform.io"
     organization = "ttp"
 
     workspaces {
@@ -10,11 +10,11 @@ terraform {
 
   required_providers {
     linode = {
-      source = "linode/linode"
+      source  = "linode/linode"
       version = "1.20.2"
     }
     acme = {
-      source = "vancluever/acme"
+      source  = "vancluever/acme"
       version = "2.5.3"
     }
   }

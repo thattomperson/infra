@@ -43,7 +43,7 @@ resource "linode_firewall" "nomad_client_firewall" {
     ipv4     = [var.secure_inboud_ipv4_cidr]
   }
 
-  inbound_policy = "DROP"
+  inbound_policy  = "DROP"
   outbound_policy = "ACCEPT"
 
   linodes = concat(module.nomad_clients.instance_ids, module.nomad_servers.instance_ids)

@@ -5,7 +5,7 @@ job "fabio" {
   group "fabio" {
     network {
       port "lb" {
-        static = 9999
+        static = f
       }
       port "ui" {
         static = 9998
