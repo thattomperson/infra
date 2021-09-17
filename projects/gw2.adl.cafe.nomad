@@ -40,7 +40,8 @@ job "docs" {
     service {
       tags = [
         "traefik.enable=true",
-        "traefik.http.routers.http.rule=Host(`gw2.adl.cafe`)",
+        "traefik.http.routers.gw2.rule=Host(`gw2.adl.cafe`)",
+        "traefik.http.routers.gw2.tls=true",
       ]
       # This tells Consul to monitor the service on the port
       # labelled "http". Since Nomad allocates high dynamic port

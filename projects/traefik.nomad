@@ -40,28 +40,25 @@ job "traefik" {
         network_mode = "host"
         args = [
           "--entryPoints.http.address=:80",
-          "--entryPoints.http.address=:443",
+          "--entryPoints.https.address=:443",
           "--entryPoints.traefik.address=:8081",
-
+          "--entrypoints.http.http.redirections.entryPoint.to=https",
 
           "--api.dashboard=true",
           "--api.insecure=true",
+
           "--providers.consulcatalog=true",
           "--providers.consulcatalog.exposedByDefault=false",
           "--providers.consulcatalog.endpoint.address=http://127.0.0.1:8500",
           "--providers.consulcatalog.endpoint.scheme=http",
           "--providers.consulcatalog.prefix=traefik",
-
           "--providers.consulcatalog.defaultrule=Host(`{{ .Name }}.adl.cafe`)",
 
-          "--certificatesresolvers.linode.acme.email=thomasalbrighton@gmail.com",
-          "--certificatesresolvers.linode.acme.storage=acme.json",
-          "--certificatesresolvers.linode.acme.dnschallenge.provider=linode"
+          "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+          # "--certificatesresolvers.linode.acme.email=thomasalbrighton@gmail.com",
+          # "--certificatesresolvers.linode.acme.storage=acme.json",
+          # "--certificatesresolvers.linode.acme.dnschallenge.provider=linode"
         ]
-      }
-
-      env {
-        LINODE_TOKEN = "${linode_token}"
       }
 
       resources {

@@ -17,6 +17,11 @@ terraform {
       source  = "vancluever/acme"
       version = "2.5.3"
     }
+
+    aws = {
+      source = "hashicorp/aws"
+      version = "3.59.0"
+    }
   }
 }
 
@@ -27,3 +32,5 @@ provider "acme" {
 provider "linode" {
   token = var.linode_token
 }
+
+provider "aws" {}
